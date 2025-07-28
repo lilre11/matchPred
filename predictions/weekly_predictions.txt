@@ -1,0 +1,30 @@
+SPOR TOTO PREDICTIONS
+==============================
+
+Galatasaray vs Fenerbahce
+m1(1-X)
+Confidence: 56.4%
+
+Besiktas vs Trabzonspor
+m2(1-X)
+Confidence: 56.5%
+
+Samsunspor vs Konyaspor
+m3(1-X)
+Confidence: 55.6%
+
+Real Madrid vs Barcelona
+m4(1-X-2)
+Confidence: 52.6%
+
+Man United vs Arsenal
+m5(1-X)
+Confidence: 62.5%
+
+
+COUPON FORMAT:
+m1(1-X)
+m2(1-X)
+m3(1-X)
+m4(1-X-2)
+m5(1-X)
