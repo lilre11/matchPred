@@ -81,7 +81,7 @@ def load_prediction_system():
             st.error("❌ No trained models found. Please run main.py first to train the models.")
             return None, None, None
         
-        # Initialize Spor Toto predictor
+        # Initialize Spor Toto predictor (don't cache this part)
         spor_toto = SporTotoPredictor(predictor, processor)
         
         return processor, predictor, spor_toto
@@ -89,6 +89,13 @@ def load_prediction_system():
     except Exception as e:
         st.error(f"Error loading prediction system: {e}")
         return None, None, None
+
+def get_fresh_prediction(processor, predictor, match_info, risk_level):
+    """Get a fresh prediction without caching"""
+    # Create a new SporTotoPredictor instance for each prediction
+    spor_toto = SporTotoPredictor(predictor, processor)
+    predictions = spor_toto.predict_matches([match_info], risk_level)
+    return predictions[0] if predictions else None
 
 def main():
     # Header
@@ -98,7 +105,7 @@ def main():
     # Load system
     processor, predictor, spor_toto = load_prediction_system()
     
-    if not all([processor, predictor, spor_toto]):
+    if not all([processor, predictor]):
         st.stop()
     
     # Sidebar
@@ -142,6 +149,15 @@ def main():
             st.caption("Leagues in Dataset:")
             for league, count in league_counts.head(5).items():
                 st.caption(f"• {league}: {count:,} matches")
+            
+            # Show sample teams
+            with st.expander("📋 Sample Teams in Dataset"):
+                home_teams = processor.df['HomeTeam'].unique() if 'HomeTeam' in processor.df.columns else []
+                sample_teams = sorted(home_teams)[:15]  # Show first 15 teams alphabetically
+                for team in sample_teams:
+                    st.caption(f"• {team}")
+                if len(home_teams) > 15:
+                    st.caption(f"... and {len(home_teams) - 15} more teams")
     
     # Main content
     tab1, tab2, tab3, tab4 = st.tabs(["🔮 Single Match", "📝 Batch Prediction", "📊 Model Insights", "ℹ️ Help"])
@@ -170,12 +186,29 @@ def main():
                         'date': datetime.now().strftime('%Y-%m-%d')
                     }
                     
-                    # Get prediction
-                    predictions = spor_toto.predict_matches([match_info], risk_level)
+                    # Check if teams exist in data
+                    home_in_data = processor.team_exists(home_team)
+                    away_in_data = processor.team_exists(away_team)
                     
-                    if predictions:
-                        prediction = predictions[0]
-                        display_single_prediction(prediction)
+                    if not home_in_data or not away_in_data:
+                        st.warning(f"⚠️ Team data not found:")
+                        if not home_in_data:
+                            st.caption(f"• {home_team} not found in historical data")
+                            similar_home = processor.get_similar_teams(home_team)
+                            if similar_home:
+                                st.caption(f"  Did you mean: {', '.join(similar_home[:3])}")
+                        if not away_in_data:
+                            st.caption(f"• {away_team} not found in historical data")
+                            similar_away = processor.get_similar_teams(away_team)
+                            if similar_away:
+                                st.caption(f"  Did you mean: {', '.join(similar_away[:3])}")
+                        st.info("💡 Prediction will use estimated statistics based on team strength calculation.")
+                    
+                    # Get prediction
+                    prediction = get_fresh_prediction(processor, predictor, match_info, risk_level)
+                    
+                    if prediction:
+                        display_single_prediction(prediction, home_in_data, away_in_data)
                     else:
                         st.error("Could not generate prediction for this match.")
             else:
@@ -187,10 +220,71 @@ def main():
         # Upload CSV or manual entry
         upload_method = st.radio(
             "Choose input method:",
-            ["📝 Manual Entry", "📄 Upload CSV"]
+            ["📋 Bulk Paste (Recommended)", "� Manual Entry", "📄 Upload CSV"]
         )
         
-        if upload_method == "📝 Manual Entry":
+        if upload_method == "📋 Bulk Paste (Recommended)":
+            st.subheader("📋 Paste All 15 Matches at Once")
+            st.info("💡 Perfect for Spor Toto! Paste match lists from team analysis or other sources.")
+            
+            # Bulk paste text area
+            bulk_input = st.text_area(
+                "Paste matches here (one per line):",
+                height=400,
+                placeholder="""Example formats (all work):
+Trabzonspor vs Bursaspor
+Fenerbahce vs Galatasaray T1
+Real Madrid vs Barcelona SP1
+Manchester United vs Arsenal
+Bayern Munich vs Dortmund
+Chelsea vs Liverpool
+AC Milan vs Inter Milan
+Ajax vs PSV
+Juventus vs Napoli
+Barcelona vs Real Madrid
+PSG vs Marseille
+Atletico vs Valencia
+Sevilla vs Betis
+Roma vs Lazio
+Atalanta vs Fiorentina""",
+                help="Supports formats: 'Team1 vs Team2', 'Team1 vs Team2 LEAGUE', 'Team1 - Team2', etc."
+            )
+            
+            # Parse and preview button
+            if bulk_input.strip():
+                lines = [line.strip() for line in bulk_input.split('\n') if line.strip()]
+                
+                st.write(f"📊 **Found {len(lines)} matches:**")
+                
+                # Parse matches
+                parsed_matches = []
+                for i, line in enumerate(lines, 1):
+                    match = parse_match_line(line)
+                    if match:
+                        parsed_matches.append(match)
+                        st.write(f"✅ {i:2d}. {match['home_team']} vs {match['away_team']} ({match['league']})")
+                    else:
+                        st.write(f"❌ {i:2d}. Could not parse: {line}")
+                
+                if parsed_matches:
+                    st.success(f"🎯 **{len(parsed_matches)} valid matches ready for prediction!**")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔮 Predict All Matches", type="primary", key="bulk_predict"):
+                            predict_batch_matches(processor, predictor, parsed_matches, risk_level)
+                    
+                    with col2:
+                        spor_toto_ready = len(parsed_matches) == 15
+                        if spor_toto_ready:
+                            st.success("🎯 Perfect! 15 matches = Spor Toto ready!")
+                        else:
+                            st.info(f"ℹ️ {len(parsed_matches)} matches (Spor Toto needs 15)")
+                
+                else:
+                    st.warning("No valid matches found. Please check the format.")
+        
+        elif upload_method == "📝 Manual Entry":
             st.subheader("Enter matches manually")
             
             # Dynamic match entry
@@ -232,7 +326,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("🔮 Predict All Matches", type="primary"):
-                        predict_batch_matches(spor_toto, st.session_state.matches, risk_level)
+                        predict_batch_matches(processor, predictor, st.session_state.matches, risk_level)
                 
                 with col2:
                     if st.button("🗑️ Clear All"):
@@ -262,7 +356,7 @@ def main():
                             }
                             matches.append(match)
                         
-                        predict_batch_matches(spor_toto, matches, risk_level)
+                        predict_batch_matches(processor, predictor, matches, risk_level)
                 
                 except Exception as e:
                     st.error(f"Error reading CSV: {e}")
@@ -355,10 +449,14 @@ def main():
         - Use predictions as guidance, not absolute truth
         """)
 
-def display_single_prediction(prediction):
+def display_single_prediction(prediction, home_in_data=True, away_in_data=True):
     """Display a single match prediction with formatting"""
     
     st.success(f"🎯 **{prediction['spor_toto_prediction']}**")
+    
+    # Team data availability warning
+    if not home_in_data or not away_in_data:
+        st.warning("⚠️ Limited historical data available - prediction uses average statistics")
     
     # Confidence badge
     confidence = prediction['ml_prediction']['confidence']
@@ -416,7 +514,66 @@ def display_single_prediction(prediction):
             </div>
             """, unsafe_allow_html=True)
 
-def predict_batch_matches(spor_toto, matches, risk_level):
+def parse_match_line(line):
+    """Parse a single match line with flexible format support"""
+    if not line:
+        return None
+    
+    # Clean the line
+    line = line.strip()
+    
+    # Remove common prefixes that might come from debug output
+    prefixes_to_remove = [
+        'Date:', 'Result:', '|', '✅', '❌', '📌', '⚽', 
+        'League:', 'Recent matches:', 'PASTEABLE FORMAT:', '1.', '2.', '3.', '4.', '5.',
+        '6.', '7.', '8.', '9.', '10.', '11.', '12.', '13.', '14.', '15.'
+    ]
+    for prefix in prefixes_to_remove:
+        if line.startswith(prefix):
+            line = line[len(prefix):].strip()
+    
+    # Parse line components
+    parts = line.split()
+    match_part = []
+    league = 'T1'  # Default league
+    
+    for part in parts:
+        if part.upper() in ['T1', 'SP1', 'PL2425', 'B1', 'IT2425', 'F1', 'E0', 'D1', 'I1', 'N1', 'P1', 'G1']:
+            league = part.upper()
+        else:
+            match_part.append(part)
+    
+    # Reconstruct match text
+    match_text = ' '.join(match_part)
+    
+    # Parse teams with flexible separators
+    separators = [' vs ', ' - ', ' x ', ' v ', ' VS ', ' V ', ' X ', ' vs. ', ' versus ']
+    teams = None
+    for sep in separators:
+        if sep in match_text:
+            teams = match_text.split(sep, 1)  # Split only on first occurrence
+            break
+    
+    if teams and len(teams) == 2:
+        home_team = teams[0].strip()
+        away_team = teams[1].strip()
+        
+        # Clean team names from any remaining metadata
+        for char in ['(', ')', '[', ']', '{', '}']:
+            if char in home_team:
+                home_team = home_team.split(char)[0].strip()
+            if char in away_team:
+                away_team = away_team.split(char)[0].strip()
+        
+        return {
+            'home_team': home_team,
+            'away_team': away_team,
+            'league': league
+        }
+    
+    return None
+
+def predict_batch_matches(processor, predictor, matches, risk_level):
     """Predict batch of matches"""
     
     if not matches:
@@ -429,36 +586,82 @@ def predict_batch_matches(spor_toto, matches, risk_level):
             if 'date' not in match:
                 match['date'] = datetime.now().strftime('%Y-%m-%d')
         
+        # Create fresh predictor for batch
+        spor_toto = SporTotoPredictor(predictor, processor)
         predictions = spor_toto.predict_matches(matches, risk_level)
     
     if predictions:
         st.success(f"✅ Generated predictions for {len(predictions)} matches!")
-        
-        # Summary table
+
+        # Sort predictions by confidence (descending)
+        sorted_preds = sorted(predictions, key=lambda p: p['ml_prediction']['confidence'], reverse=True)
+
+        # Set limits for doubles/triples (user can adjust these)
+        max_doubles = 6
+        max_triples = 2
+        double_count = 0
+        triple_count = 0
+        coupon_lines = []
         summary_data = []
-        for pred in predictions:
+
+
+        # Calculate difference between top two probabilities for each match
+        match_diffs = []
+        for pred in sorted_preds:
+            probs = pred['ml_prediction']['probabilities']
+            sorted_outcomes = sorted([
+                ('1', probs['home_win']),
+                ('X', probs['draw']),
+                ('2', probs['away_win'])
+            ], key=lambda x: x[1], reverse=True)
+            best_val = sorted_outcomes[0][1]
+            second_val = sorted_outcomes[1][1]
+            diff1 = abs(best_val - second_val)
+            match_diffs.append(diff1)
+
+        # Get indices of 6 matches with smallest diff (closest probabilities)
+        num_doubles = 6 if len(sorted_preds) >= 6 else len(sorted_preds)
+        double_indices = sorted(range(len(match_diffs)), key=lambda i: match_diffs[i])[:num_doubles]
+
+        for idx, pred in enumerate(sorted_preds):
+            probs = pred['ml_prediction']['probabilities']
+            sorted_outcomes = sorted([
+                ('1', probs['home_win']),
+                ('X', probs['draw']),
+                ('2', probs['away_win'])
+            ], key=lambda x: x[1], reverse=True)
+            best = sorted_outcomes[0][0]
+            second = sorted_outcomes[1][0]
+            third = sorted_outcomes[2][0]
+
+            if idx in double_indices:
+                coupon = f"m{len(coupon_lines)+1}({best}-{second})"
+            else:
+                coupon = f"m{len(coupon_lines)+1}({best})"
+
+            coupon_lines.append(coupon)
             summary_data.append({
                 'Match': f"{pred['home_team']} vs {pred['away_team']}",
-                'Prediction': pred['spor_toto_prediction'],
+                'Prediction': coupon,
                 'Confidence': f"{pred['ml_prediction']['confidence']:.1f}%",
-                'Home': f"{pred['ml_prediction']['probabilities']['home_win']:.1f}%",
-                'Draw': f"{pred['ml_prediction']['probabilities']['draw']:.1f}%",
-                'Away': f"{pred['ml_prediction']['probabilities']['away_win']:.1f}%"
+                'Home': f"{probs['home_win']:.1f}%",
+                'Draw': f"{probs['draw']:.1f}%",
+                'Away': f"{probs['away_win']:.1f}%"
             })
-        
+
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, use_container_width=True)
-        
+
         # Coupon format
-        st.subheader("🎫 Spor Toto Coupon Format")
-        coupon_text = "\n".join([pred['spor_toto_prediction'] for pred in predictions])
+        st.subheader("🎫 Spor Toto Coupon Format (Singles prioritized)")
+        coupon_text = "\n".join(coupon_lines)
         st.code(coupon_text, language="text")
-        
+
         # Statistics
-        single_predictions = sum(1 for pred in predictions if '(' in pred['spor_toto_prediction'] and '-' not in pred['spor_toto_prediction'].split('(')[1])
-        double_predictions = sum(1 for pred in predictions if pred['spor_toto_prediction'].count('-') == 1)
-        triple_predictions = sum(1 for pred in predictions if pred['spor_toto_prediction'].count('-') == 2)
-        
+        single_predictions = sum(1 for c in coupon_lines if '(' in c and '-' not in c.split('(')[1])
+        double_predictions = sum(1 for c in coupon_lines if c.count('-') == 1)
+        triple_predictions = sum(1 for c in coupon_lines if c.count('-') == 2)
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Single Outcomes", single_predictions)
@@ -469,8 +672,8 @@ def predict_batch_matches(spor_toto, matches, risk_level):
         with col4:
             # Calculate combinations
             total_combinations = 1
-            for pred in predictions:
-                outcome_count = pred['spor_toto_prediction'].split('(')[1].count('-') + 1
+            for c in coupon_lines:
+                outcome_count = c.split('(')[1].count('-') + 1
                 total_combinations *= outcome_count
             st.metric("Total Combinations", f"{total_combinations:,}")
 
